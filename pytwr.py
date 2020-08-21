@@ -2,6 +2,7 @@ from scipy.linalg import solve_triangular
 import scipy.interpolate as interp
 import numpy as np
 import matplotlib.pylab as plt
+from matplotlib.pyplot import cm
 import imutils
 
 def rescale(arr):
@@ -48,11 +49,37 @@ def gen_ell_point(r, y, incl):
     cos_i = np.cos(incl * np.pi / 180.)
     return np.sqrt(r ** 2 - y ** 2 / cos_i ** 2)
 
-def prepare_maps(PA, incl, vel, intens):
-    # TODO
-    pass
 
-def add_ells(ax, ymin=None, delta_y=None, y_bins=None, X_max=None, center=None, incl=None):
+def ell_line_inters(line_height, ell_height, cos_i, cen_x, cen_y):
+    """
+    Find two intersection points for line parallel X-axis and ellipsis
+    :param line_height:
+    :param ell_height:
+    :param cos_i:
+    :param cen_x:
+    :param cen_y:
+    :return:
+    """
+    yi = line_height
+    yii = ell_height
+    tmp = (yii / cos_i) ** 2 - (yi / cos_i) ** 2
+    tmp = 0 if tmp < 1e-5 else tmp # TODO: why this is needed?
+    right = [np.sqrt(tmp) + cen_x, yi + cen_y]
+    left = [-np.sqrt(tmp) + cen_x, yi + cen_y]
+    return (left, right)
+
+
+def overlay_ellipses_grid(ax, ymin=None, delta_y=None, y_bins=None, X_max=None, center=None, incl=None):
+    """
+    Plot ellipses with step delta_y
+    :param ax: image to plot on
+    :param ymin: first ellipsis distance from center
+    :param delta_y: ell width
+    :param y_bins: number of ellipses
+    :param X_max: tangent line boundary, from center
+    :param center: (x,y) of center
+    :param incl: inclination of galaxy
+    """
     for ind_i in range(0, y_bins + 1, 1):
         cen_x,cen_y = center
         cos_i = np.cos(incl * np.pi / 180.)
@@ -62,6 +89,45 @@ def add_ells(ax, ymin=None, delta_y=None, y_bins=None, X_max=None, center=None, 
         x, y = generate_ell(r0,  incl)
         ax.plot(x + cen_x, y + cen_y, ':', color='k', alpha=0.5)
 
+
+def plot_ifverbose_map(ax, map_data, title, lim_frame, ymin, delta_y, y_bins, X_max, cen_x, cen_y, **kwargs):
+    """
+    Plot data map.
+    :param ax:
+    :param map_data:
+    :param title:
+    :param lim_frame:
+    :param ymin:
+    :param delta_y:
+    :param y_bins:
+    :param X_max:
+    :param cen_x:
+    :param cen_y:
+    :param kwargs:
+    """
+    im = ax.imshow(np.squeeze(map_data), origin='lower', **kwargs)
+    if lim_frame:
+        if ymin < 0 and delta_y < 0:
+            ax.set_xlim(cen_x - X_max - 10, cen_x + X_max + 10)
+            ax.set_ylim(cen_y + ymin + delta_y * y_bins - 10, cen_y + 5)
+        else:
+            ax.set_xlim(cen_x - X_max - 10, cen_x + X_max + 10)
+            ax.set_ylim(cen_y - 5, cen_y + ymin + delta_y * y_bins + 10)
+    plt.colorbar(im, fraction=0.046, pad=0.04, orientation="horizontal")
+    ax.scatter(cen_x, cen_y, 50, 'k')
+    ax.set_title(title)
+
+
+def grid_point_val(points_grid, dmap=None, method='linear'):
+    """
+    This function takes 2d array and list of points and interpolate values to these points.
+    :param points_grid: list of points to interpolate values into
+    :param dmap: data map, 2d numpy array
+    :param method: 'linear', 'nearest' or 'cubic'
+    :return: list of interpolated values
+    """
+    xm, ym = np.meshgrid(np.arange(dmap.shape[1]), np.arange(dmap.shape[0]))
+    return interp.griddata(list(zip(xm.ravel(), ym.ravel())), dmap.ravel(), points_grid, method=method)
 
 def solve_TWR(intens=None,
               vel=None,
@@ -74,9 +140,25 @@ def solve_TWR(intens=None,
               verbose=False,
               r_scale=1.,
               lim_frame=False,
-              # intens_points_only=False,
-              ax=None):
+              ax=None,
+              img_scale=1.5):
+    """
 
+    :param intens:
+    :param vel:
+    :param center:
+    :param incl:
+    :param delta_y: negative if ...
+    :param y_bins:
+    :param X_max:
+    :param ymin: first ellipsis distance from center, `delta_y` if None
+    :param verbose:
+    :param r_scale:
+    :param lim_frame:
+    :param ax: TODO remove or rewrite
+    :param img_scale: to scale verbose plots
+    :return:
+    """
     cen_x, cen_y = center
 
     cos_i = np.cos(incl * np.pi / 180.)
@@ -85,206 +167,192 @@ def solve_TWR(intens=None,
     if ymin is None:
         ymin = delta_y
 
+    # plot velocity and intensity maps with superimposed ellipses
     if verbose:
-        if ax is None:
-            fig = plt.figure(figsize=[48 * 1.5, 24 * 1.5])
-            ax = plt.subplot(121)
-        im = ax.imshow(np.squeeze(vel), origin='lower', cmap='rainbow', vmin=-200, vmax=200)
-        if lim_frame:
-            if ymin < 0 and delta_y < 0:
-                ax.set_xlim(cen_x - X_max - 10, cen_x + X_max + 10)
-                ax.set_ylim(cen_y + ymin + delta_y * y_bins - 10, cen_y + 5)
-            else:
-                ax.set_xlim(cen_x - X_max - 10, cen_x + X_max + 10)
-                ax.set_ylim(cen_y - 5, cen_y + ymin + delta_y * y_bins + 10)
-        plt.colorbar(im, fraction=0.046, pad=0.04, orientation="horizontal")
+        fig = plt.figure(figsize=[48 * img_scale, 24 * img_scale])
 
-        #         divider = make_axes_locatable(ax)
-        #         cax = divider.append_axes("right", size="5%", pad=0.1)
-        #         plt.colorbar(im, cax=cax)
+        ax = plt.subplot(121)
+        plot_ifverbose_map(ax, vel, 'Velocity', lim_frame, ymin, delta_y, y_bins, X_max, cen_x, cen_y, cmap='rainbow', vmin=-200, vmax=200)
+        overlay_ellipses_grid(ax, ymin=ymin, delta_y=delta_y, y_bins=y_bins, X_max=X_max, center=center, incl=incl)
 
-        ax.scatter(cen_x, cen_y, 50, 'k')
-        ax.set_title('velocity')
-
-    for ind_i in range(0, y_bins + 1, 1):
-        yi = ymin + ind_i * delta_y
-        if verbose:
-            ax.plot([cen_x - X_max, cen_x + X_max], [cen_y + yi, cen_y + yi], '--', color='r', alpha=0.5)
-        r0 = yi / cos_i
-        x, y = generate_ell(r0,  incl)
-        if verbose:
-            ax.plot(x + cen_x, y + cen_y, ':', color='r', alpha=0.5)
-
-    if verbose:
         ax = plt.subplot(122)
-        im = plt.imshow(np.squeeze(np.log2(intens)), origin='lower', cmap='rainbow')
-        if lim_frame:
-            if ymin < 0 and delta_y < 0:
-                ax.set_xlim(cen_x - X_max - 10, cen_x + X_max + 10)
-                ax.set_ylim(cen_y + ymin + delta_y * y_bins - 10, cen_y + 5)
-            else:
-                ax.set_xlim(cen_x - X_max - 10, cen_x + X_max + 10)
-                ax.set_ylim(cen_y - 5, cen_y + ymin + delta_y * y_bins + 10)
-        plt.colorbar(im, fraction=0.046, pad=0.04, orientation="horizontal")
-        ax.scatter(cen_x, cen_y, 50, 'k')
-        ax.set_title('log2_Sigma')
+        plot_ifverbose_map(ax, np.log2(intens), 'log2_Intensity', lim_frame, ymin, delta_y, y_bins, X_max, cen_x, cen_y, cmap='rainbow')
+        overlay_ellipses_grid(ax, ymin=ymin, delta_y=delta_y, y_bins=y_bins, X_max=X_max, center=center, incl=incl)
 
-    # fill radial bins
+        plt.show()
+
+    # fill radial bins, where we will find Omega
     rrs = []
     for ind_i in range(0, y_bins + 1, 1):
         yi = ymin + ind_i * delta_y
-        if verbose:
-            ax.plot([cen_x - X_max, cen_x + X_max], [cen_y + yi, cen_y + yi], '--', color='k', alpha=0.5)
-        r0 = yi / cos_i
-        rrs.append(r0)
-        x, y = generate_ell(r0, incl)
-        if verbose:
-            ax.plot(x + cen_x, y + cen_y, ':', color='k', alpha=0.5)
-
+        rrs.append(yi / cos_i)
     if verbose:
-        print(f'radial bins: {rrs}\n')
-        for tmp_rrs in rrs[::-1]:
-            ax.plot([cen_x, cen_x + tmp_rrs], [cen_y, cen_y], '.-')
+        print(f'Radial bins: {rrs}\n')
 
-    points_r = []
-    points_l = []
-    for ind_i in range(0, y_bins, 1):
-        yi = ymin + ind_i * delta_y
-        for ind_j in range(ind_i + 1, y_bins + 1, 1):
+    # plot radial bins (right now images are the same, probably should replace second with something else)
+    if verbose:
+
+        fig = plt.figure(figsize=[48 * img_scale, 24 * img_scale])
+        ax1 = plt.subplot(121)
+        tmp = np.zeros(vel.shape)
+        tmp[tmp == 0.0] = np.nan
+        plot_ifverbose_map(ax1, tmp, 'Radial bins', lim_frame, ymin, delta_y, y_bins, X_max, cen_x, cen_y)
+        overlay_ellipses_grid(ax1, ymin=ymin, delta_y=delta_y, y_bins=y_bins, X_max=X_max, center=center, incl=incl)
+
+        bin_colors = cm.rainbow(np.linspace(0, 1, y_bins + 1))
+        for ind_i in range(0, y_bins, 1):
+            yi = ymin + ind_i * delta_y
+            for ind_j in range(ind_i + 1, y_bins + 1, 1):
+                yii = ymin + ind_j * delta_y
+                pl, pr = ell_line_inters(yi, yii, cos_i, cen_x, cen_y)
+                if ind_j > 1:
+                    pl_, pr_ = ell_line_inters(yi, yii - delta_y, cos_i, cen_x, cen_y)
+                else:
+                    pl_, pr_ = (cen_x, yi + cen_y), (cen_x, yi + cen_y)
+
+                color_ = bin_colors[ind_j]
+                ax1.plot([pl[0], pl_[0]], [pl[1], pl_[1]], '-', color=color_)
+                ax1.plot([pr[0], pr_[0]], [pr[1], pr_[1]], '-', color=color_)
+
+        ax2 = plt.subplot(122)
+        plot_ifverbose_map(ax2, tmp, 'Ellipses subparts', lim_frame, ymin, delta_y, y_bins, X_max, cen_x, cen_y)
+        overlay_ellipses_grid(ax2, ymin=ymin, delta_y=delta_y, y_bins=y_bins, X_max=X_max, center=center, incl=incl)
+
+        bin_colors = cm.rainbow(np.linspace(0, 1, y_bins + 1))
+        for ind_i in range(0, y_bins, 1):
+            yi = ymin + ind_i * delta_y
+            for ind_j in range(ind_i + 1, y_bins + 1, 1):
+                yii = ymin + ind_j * delta_y
+                pl, pr = ell_line_inters(yi, yii, cos_i, cen_x, cen_y)
+                if ind_j > 1:
+                    pl_, pr_ = ell_line_inters(yi, yii - delta_y, cos_i, cen_x, cen_y)
+                else:
+                    pl_, pr_ = (cen_x, yi + cen_y), (cen_x, yi + cen_y)
+
+                color_ = bin_colors[ind_j]
+                ax2.plot([pl[0], pl_[0]], [pl[1], pl_[1]], '|-', color=color_)
+                ax2.plot([pr[0], pr_[0]], [pr[1], pr_[1]], '|-', color=color_)
+
+        plt.show()
+
+    # function to plot boundaries of ellipses
+    def plot_vert_lines(ind, ax):
+        ax.axvline(x=cen_x, color='k', alpha=0.5, ls='--')
+        for ind_j in range(ind + 1, y_bins + 1, 1):
             yii = ymin + ind_j * delta_y
-            points_r.append([np.sqrt((yii / cos_i) ** 2 - (yi / cos_i) ** 2) + cen_x, yi + cen_y])
-            points_l.append([-np.sqrt((yii / cos_i) ** 2 - (yi / cos_i) ** 2) + cen_x, yi + cen_y])
+            xxx_l, xxx_r = ell_line_inters(yi, yii, cos_i, cen_x, cen_y)
+            ax.axvline(x=xxx_r[0], color='k', alpha=0.5, ls=':')
+            ax.axvline(x=xxx_l[0], color='k', alpha=0.5, ls=':')
 
-    if verbose:
-        style = dict(size=10, color='gray')
-
-        for tmp_ind, point in enumerate(points_r):
-            ax.scatter(point[0], point[1], 10., marker='s', color='m')
-            ax.text(point[0], point[1], str(tmp_ind), ha='right', **style)
-
-        for tmp_ind, point in enumerate(points_l):
-            ax.scatter(point[0], point[1], 10., marker='s', color='c')
-            ax.text(point[0], point[1], str(tmp_ind), ha='right', **style)
-
-    def grid_point_val(pp, dmap=None):
-        xm, ym = np.meshgrid(np.arange(dmap.shape[1]), np.arange(dmap.shape[0]))
-        return interp.griddata(list(zip(xm.ravel(), ym.ravel())), dmap.ravel(), pp, method='linear')
-
-    sigma_r = grid_point_val(points_r, dmap=intens)
-    sigma_l = grid_point_val(points_l, dmap=intens)
-
+    # triangular matrix left and right sides, see paper for details
     K = np.zeros(shape=(y_bins, y_bins))
     b = np.zeros(y_bins)
 
-    # TODO: check; we do not multiply with r_scale because dx also will be in pix
-    dr = delta_y / cos_i
-
-    ccount = 0
+    # fill equations (triangular matrix)
     for ind_i in range(0, y_bins, 1):
         yi = ymin + ind_i * delta_y
 
-        if False:
-            pass
-        # if intens_points_only:
-        #     slice_points = [(_, cen_y + yi) for _ in np.arange(cen_x - X_max, cen_x + X_max, 1.)]
-        #     # TODO: implement
-        #     xp = []
-        #     raise NotImplementedError('Wrong `intens_points_only`, buddy.')
-        else:
-            slice_points = []
-            xp = [cen_x]
-            for ind_j in range(ind_i + 1, y_bins + 1, 1):
-                yii = ymin + ind_j * delta_y
-                xp.append(np.sqrt((yii / cos_i) ** 2 - (yi / cos_i) ** 2) + cen_x)
+        # plot individual slices
+        if verbose:
+            fig, axes = plt.subplots(figsize=[30*img_scale, 14*img_scale], nrows=2, ncols=2, sharex=True)
 
-                slice_points.append([np.sqrt((yii / cos_i) ** 2 - (yi / cos_i) ** 2) + cen_x, yi + cen_y])
-                slice_points.append([-np.sqrt((yii / cos_i) ** 2 - (yi / cos_i) ** 2) + cen_x, yi + cen_y])
+            # this slice used actual pixels on line, not interpolated values
+            int_slice = int(cen_y + yi + 1)
+            xmi,xma = int(cen_x - X_max - 1), int(cen_x + X_max + 1)
+            xrange = range(xmi,xma, 1)
 
-        #         if verbose:
-        #             for iiii in range(0, len(xp)-1):
-        #                 start_ = xp[iiii]
-        #                 finish_ = xp[iiii+1]
-        #                 ax.plot([start_, finish_], [yi+cen_y, yi+cen_y], '.-')
+            ax = axes[0,0]
+            vdata = np.ravel(vel[int_slice, xmi:xma])
+            ax.plot(xrange, vdata, '.-', color='r')
+            ax.set_title('Velocity: slice yi={:2.2f} [pix] from center'.format(yi))
+            plot_vert_lines(ind_i, ax)
 
-        full_slice_points = [(_ + cen_x, yi + cen_y) for _ in np.arange(-X_max - 0.5, X_max + 0.5, 1)]
-        #         if verbose:
-        #             ax.scatter([_[0] for _ in full_slice_points], [_[1] for _ in full_slice_points], 10, marker='x')
+            ax = axes[1, 0]
+            idata = np.ravel(intens[int_slice, xmi:xma])
+            ax.plot(xrange, idata, '.-', color='b')
+            ax.set_title('Intens: slice yi={:2.2f} [pix] from center'.format(yi))
+            plot_vert_lines(ind_i, ax)
 
-        v_y = grid_point_val(full_slice_points, dmap=vel) / sin_i
-        sigma = grid_point_val(full_slice_points, dmap=intens)
+        # here we interpolate data to new grid;
+        # We probably can use exact pixels on line, but this can be difficult in case of y between pixels, etc.
+        bin_colors = cm.rainbow(np.linspace(0, 1, y_bins + 1))
+        for ind_j in range(ind_i + 1, y_bins + 1, 1):
+            yii = ymin + ind_j * delta_y
+            pl, pr = ell_line_inters(yi, yii, cos_i, cen_x, cen_y)
+            if ind_j > 1:
+                pl_, pr_ = ell_line_inters(yi, yii - delta_y, cos_i, cen_x, cen_y)
+            else:
+                pl_, pr_ = (cen_x, yi + cen_y), (cen_x, yi + cen_y)
 
-        #         if verbose:
-        #             print(v_y)
-        #             print(sigma)
+            color_ = bin_colors[ind_j]
 
-        #         if verbose:
-        #             print(f'i:{ind_i}\n v_y:{v_y}\n sigma:{sigma}\n dx:{dx}')
+            full_slice_points_r = [(_, yi + cen_y + 0.5) for _ in np.arange(pr_[0], pr[0], 1)]
+            sigma_rr = grid_point_val(full_slice_points_r, dmap=intens)
+            vel_rr = grid_point_val(full_slice_points_r, dmap=vel)
 
-        b[ind_i] = np.sum(v_y * sigma)
+            # plot that interpolated values are good and correct
+            if verbose:
+                ax.plot([_[0] for _ in full_slice_points_r], sigma_rr, 'x', color=color_)
+                axes[0,0].plot([_[0] for _ in full_slice_points_r], vel_rr, 'x', color=color_)
 
-        diff_xp = list(np.diff(xp))
-
-        for ind_j in range(ind_i, y_bins, 1):
-
-            stx = xp[ind_j - ind_i]
-            #             enx = xp[ind_j-ind_i+1]+1
-            enx = xp[ind_j - ind_i + 1]
-
-            #             print('!!!!!stxenx', stx, enx)
-            #             print('!!!!!arange', np.arange(stx-0.5, enx+0.5, 1) - xp[0])
-
-            full_slice_points_ = [(_, yi + cen_y) for _ in np.arange(stx, enx, 1)]
-            sigma_rr = grid_point_val(full_slice_points_, dmap=intens)
-
-            #             print('!!!!!fsp', full_slice_points_)
-            #             print('!!!!!ssrr', sigma_rr)
-
-            full_slice_points_ = [(cen_x - (_ - cen_x), yi + cen_y) for _ in np.arange(stx, enx, 1)]
-            sigma_ll = grid_point_val(full_slice_points_, dmap=intens)
+            full_slice_points_l = [(cen_x - (_ - cen_x), yi + cen_y + 0.5) for _ in np.arange(pr_[0], pr[0], 1)]
+            sigma_ll = grid_point_val(full_slice_points_l, dmap=intens)
+            vel_ll = grid_point_val(full_slice_points_l, dmap=vel)
 
             if verbose:
-                ax.scatter([_[0] for _ in full_slice_points_], [_[1] for _ in full_slice_points_], 10, marker='o',
-                           color='k', alpha=0.3)
+                ax.plot([_[0] for _ in full_slice_points_l], sigma_ll, 'x', color=color_)
+                axes[0, 0].plot([_[0] for _ in full_slice_points_l], vel_ll, 'x', color=color_)
 
-            #             print('!!!!!fsp', full_slice_points_)
-            #             print('!!!!!ssll', sigma_ll)
+            # right side of equation
+            mult_rr = sigma_rr * vel_rr / sin_i
+            mult_ll = sigma_ll * vel_ll / sin_i
+            b[ind_i] += np.sum(mult_rr + mult_ll)
 
-            #             r = rrs[ind_j+1]*r_scale
-            delta_Sigma = sigma_rr - sigma_ll
-            #             K[ind_i, ind_j] = r*delta_Sigma*dr
-            K[ind_i, ind_j] = np.sum(
-                delta_Sigma * (np.arange(stx, enx, 1) - xp[0])) * r_scale  # once because dx in pix on the both sides
+            # plot it for each segment with color selected accordingly
+            if verbose:
+                axes[1, 1].fill_between([_[0] for _ in full_slice_points_l], [0] * len(mult_ll), mult_ll, color=color_)
+                axes[1, 1].fill_between([_[0] for _ in full_slice_points_r], [0] * len(mult_rr), mult_rr, color=color_)
+
+            xsigma_r = (np.array([_[0] for _ in full_slice_points_r]) - cen_x) * sigma_rr
+            xsigma_l = (np.array([_[0] for _ in full_slice_points_l]) - cen_x) * sigma_ll
 
             if verbose:
-                ddist = np.arange(stx, enx, 1) - xp[0]
-                ax.plot([cen_x, cen_x + ddist[-1]], [yi + cen_y, yi + cen_y], '-', color='k')
+                axes[0, 1].fill_between([_[0] for _ in full_slice_points_r], [0] * len(xsigma_r), xsigma_r, color=color_)
+                axes[0, 1].fill_between([_[0] for _ in full_slice_points_l], [0] * len(xsigma_l), xsigma_l, color=color_)
 
-            #             print(i,j,K[i,j],r,Sigma, sigma_r[ccount], sigma_l[ccount],ccount)
-            ccount += 1
+            delta_Sigma = xsigma_r + xsigma_l # plus is because delta_x for left side is negative, see plots
+            K[ind_i, ind_j-1] = np.sum(delta_Sigma) * r_scale  # once because dx in pix on the both sides
 
+        if verbose:
+            axes[1, 1].set_title('Bi: vel * intens / sin_i')
+            axes[0, 1].set_title('K: intens * x')
+            plot_vert_lines(ind_i, axes[0, 1])
+            plot_vert_lines(ind_i, axes[1, 1])
     if verbose:
         print('K:\n ', K)
         print('b:\n ', b)
     try:
+        # solve equations and print results
         om = solve_triangular(K, b)
         if verbose:
             print('Omega:', om)
             print('Residuals:', b - K.dot(om))
         return om, rrs
     except Exception as e:
-        print(e)
-        print('===========DEBUG===============')
-        print('Check individual elements of matrix:\n')
-        ccount = 0
-        for ind_i in range(0, y_bins, 1):
-            for ind_j in range(ind_i, y_bins, 1):
-                r = rrs[ind_j + 1] * r_scale
-                delta_Sigma = sigma_r[ccount] - sigma_l[ccount]
-                if r == 0:
-                    print(f'K[{ind_i},{ind_j}] = 0 because rrs[{ccount}]={r}')
-                if delta_Sigma == 0:
-                    print(f'K[{ind_i},{ind_j}] = 0 because delta_Sigma[{ccount}]={delta_Sigma}')
-                    print('(sigma_r = {}, sigma_l = {})'.format(sigma_r[ccount], sigma_l[ccount]))
-                ccount += 1
-        print('===========DEBUG END===============')
+        # TODO: add handling
+        # print(e)
+        # print('===========DEBUG===============')
+        # print('Check individual elements of matrix:\n')
+        # ccount = 0
+        # for ind_i in range(0, y_bins, 1):
+        #     for ind_j in range(ind_i, y_bins, 1):
+        #         r = rrs[ind_j + 1] * r_scale
+        #         delta_Sigma = sigma_r[ccount] - sigma_l[ccount]
+        #         if r == 0:
+        #             print(f'K[{ind_i},{ind_j}] = 0 because rrs[{ccount}]={r}')
+        #         if delta_Sigma == 0:
+        #             print(f'K[{ind_i},{ind_j}] = 0 because delta_Sigma[{ccount}]={delta_Sigma}')
+        #             print('(sigma_r = {}, sigma_l = {})'.format(sigma_r[ccount], sigma_l[ccount]))
+        #         ccount += 1
+        # print('===========DEBUG END===============')
         return
