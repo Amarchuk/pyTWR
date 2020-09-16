@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pylab as plt
 from matplotlib.pyplot import cm
 import imutils
+import statsmodels.api as sm
 
 def rescale(arr):
     '''rescale array to [0,1]'''
@@ -356,3 +357,141 @@ def solve_TWR(intens=None,
         #         ccount += 1
         # print('===========DEBUG END===============')
         return
+
+
+def solve_TW(intens=None,
+              vel=None,
+              center=None,
+              incl=None,
+              ys = [],
+              delta_y=15.,
+              y_bins=4,
+              X_max=None,
+              ymin=0.,
+              verbose=False,
+              r_scale=1.,
+              ax=None,
+              img_scale=1.5):
+
+    cen_x, cen_y = center
+
+    cos_i = np.cos(incl * np.pi / 180.)
+    sin_i = np.sin(incl * np.pi / 180.)
+
+    if len(ys) == 0:
+        ys = [ymin+_*delta_y for _ in range(-y_bins, y_bins+1, 1)]
+
+    cen_x, cen_y = center
+
+    cos_i = np.cos(incl * np.pi / 180.)
+    sin_i = np.sin(incl * np.pi / 180.)
+
+    if ymin is None:
+        ymin = delta_y
+
+    # plot velocity and intensity maps along with apertures
+    if verbose:
+        fig = plt.figure(figsize=[48 * img_scale, 24 * img_scale])
+
+        ax = plt.subplot(121)
+        plot_ifverbose_map(ax, vel, 'Velocity', False, ymin, delta_y, y_bins, X_max, cen_x, cen_y, cmap='rainbow',
+                           vmin=-200, vmax=200)
+
+        for yi in ys:
+            ax.plot([cen_x - X_max, cen_x + X_max], [cen_y + yi, cen_y + yi], '--', color='k', alpha=0.5)
+
+        ax = plt.subplot(122)
+        plot_ifverbose_map(ax, np.log2(intens), 'log2_Intensity', False, ymin, delta_y, y_bins, X_max, cen_x, cen_y,
+                           cmap='rainbow', vmin=-2)
+
+        for yi in ys:
+            ax.plot([cen_x - X_max, cen_x + X_max], [cen_y + yi, cen_y + yi], '--', color='k', alpha=0.5)
+
+        plt.show()
+
+    right_side = np.zeros(len(ys))
+    left_side = np.zeros(len(ys))
+    intens_integral = np.zeros(len(ys))
+
+    # fill equations right and left side
+    for ind_i, yi in enumerate(ys):
+        full_slice_points = [(_ + cen_x + 0.5, yi + cen_y + 0.5) for _ in np.arange(-X_max, X_max, 1)]
+
+        sigma_fsp = grid_point_val(full_slice_points, dmap=intens)
+        vel_fsp = grid_point_val(full_slice_points, dmap=vel)
+        right_side[ind_i] = np.sum(sigma_fsp * vel_fsp / sin_i)
+
+        x_fsp = np.array([_[0] * r_scale for _ in full_slice_points]) - cen_x * r_scale
+        left_side[ind_i] = np.sum(sigma_fsp * x_fsp)
+
+        intens_integral[ind_i] = np.sum(sigma_fsp)
+
+
+    # TODO: old integrer version without interpolation, do smth with it
+    # for ind_i in range(0, y_bins, 1):
+    #     yi = ymin + ind_i * delta_y
+    #
+    #     int_slice = int(cen_y + yi + 1)
+    #     xmi, xma = int(cen_x - X_max - 1), int(cen_x + X_max + 1)
+    #     xrange = range(xmi, xma, 1)
+    #
+    #     vdata = np.ravel(vel[int_slice, xmi:xma])
+    #     idata = np.ravel(intens[int_slice, xmi:xma])
+    #
+    #     right_side[ind_i] = np.sum(idata * vdata / sin_i)
+    #
+    #     x_fsp = (np.array(xrange) - cen_x) * r_scale
+    #     left_side[ind_i] = np.sum(idata * x_fsp)
+    #
+    #     intens_integral[ind_i] = np.sum(idata)
+
+    # calculate <x> and <v_y> values weighted by intensity integral
+    xp, yp = np.array(left_side) / np.array(intens_integral), np.array(right_side) / np.array(intens_integral)
+
+    # build model
+    x = sm.add_constant(xp.reshape((-1, 1)))
+    ols = sm.OLS(yp, x)
+    ols_result = ols.fit()
+
+    if verbose:
+
+        r_sq = ols_result.rsquared
+        print('coefficient of determination R^2:', r_sq)
+        print('intercept: {:.3f}+/-{:.3f} (SE)'.format(ols_result.params[0], ols_result.bse[0]))
+        print('slope Ω: {:.3f}+/-{:.3f} (SE)'.format(ols_result.params[1], ols_result.bse[1]))
+
+        fig, axes = plt.subplots(figsize=[14 * img_scale, 7 * img_scale], ncols=2, nrows=1, sharey=True, sharex=True)
+
+        ax = axes[0]
+        ax.plot(xp, yp, 'x--', color='b')
+        for ind_i, yi in enumerate(ys):
+            ax.annotate(str(yi), (xp[ind_i], yp[ind_i]))
+
+        ax.set_xlabel('<x>, kpc')
+        ax.set_ylabel('<V>, km/s')
+
+        ax = axes[1]
+        ax.plot(xp, yp, 'o', color='b')
+
+        def linm(slope, intercept, xvals):
+            return slope * xvals + intercept
+
+        pps = np.linspace(min(xp)*0.9, max(xp)*1.1, 100)
+
+        y_pred = linm(ols_result.params[1], ols_result.params[0], pps)
+        plt.plot(pps, y_pred, '--', color='r')
+
+        y_pred_max = linm(ols_result.params[1] - ols_result.bse[1], ols_result.params[0], pps)
+        y_pred_min = linm(ols_result.params[1] + ols_result.bse[1], ols_result.params[0], pps)
+        plt.fill_between(pps, y_pred_max, y_pred_min, alpha=0.3, color='r')
+
+        plt.title('slope Ω: {:.3f}+/-{:.3f} (SE)'.format(ols_result.params[1], ols_result.bse[1]))
+
+        ax.set_xlabel('<x>, kpc')
+        ax.set_ylabel('<V>, km/s')
+
+        plt.show()
+
+    omega, omega_se = ols_result.params[1], ols_result.bse[1]
+
+    return omega, omega_se
